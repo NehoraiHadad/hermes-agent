@@ -142,6 +142,70 @@ The gateway starts the WhatsApp bridge automatically using the saved session.
 
 ---
 
+## Group Chats
+
+Groups are **off by default** (`group_policy` defaults to `pairing`, which for
+groups means "not enabled" — there is no group pairing handshake). To let the
+bot participate in groups, configure it in `~/.hermes/config.yaml`:
+
+```yaml
+whatsapp:
+  group_policy: allowlist        # "open" | "allowlist" | "disabled"
+  group_allow_from:
+    - "120363012345678901@g.us"  # exact group JIDs
+  require_mention: true          # only respond when addressed (recommended for groups)
+  mention_patterns:              # optional regex wake words (case-insensitive)
+    - "^\\s*hermes\\b"
+  # free_response_chats:         # chats exempt from require_mention
+  #   - "120363012345678901@g.us"
+```
+
+With `require_mention: true` the bot answers when it is @-mentioned, quoted,
+addressed with a `/command`, or matched by a `mention_patterns` regex.
+Without it the bot answers **every** message in an allowed group — rarely what
+you want outside a dedicated bot group.
+
+Group participants must also pass the sender-level allowlist
+(`WHATSAPP_ALLOWED_USERS`, see Step 3) before their messages reach the agent.
+
+### Group History Backfill
+
+In a mention-gated group, messages that don't address the bot never reach the
+session transcript — so by itself the bot would answer without seeing the
+conversation around it. Discord and Slack close this gap by fetching recent
+channel history from their APIs; WhatsApp has no history API, so the adapter
+instead buffers the skipped group messages (in memory, per chat) and attaches
+them to the next triggering message as context:
+
+```
+[Recent group messages]
+[Alice] has anyone seen the plumber?
+[Bob] the pool reopens sunday
+
+[New message]
+[Dana] @bot what did I miss?
+```
+
+Each participant's session catches up independently — a message is injected
+at most once per participant. Senders that fail the configured authorization
+check are tagged `[unverified]`, with a note telling the model to treat their
+lines as background, not instructions.
+
+Enabled by default; it only activates when `require_mention` is on. Tune or
+disable it with:
+
+```yaml
+whatsapp:
+  history_backfill: true         # default: true
+  history_backfill_limit: 50     # max buffered messages per group (default: 50)
+```
+
+(or `WHATSAPP_HISTORY_BACKFILL` / `WHATSAPP_HISTORY_BACKFILL_LIMIT`).
+The buffer holds the last N skipped messages per group in gateway memory; it
+is not persisted across restarts.
+
+---
+
 ## Session Persistence
 
 The Baileys bridge saves its session under `~/.hermes/platforms/whatsapp/session`. This means:

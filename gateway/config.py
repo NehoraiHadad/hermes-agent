@@ -1634,6 +1634,10 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["free_response_channels"] = platform_cfg["free_response_channels"]
                 if "mention_patterns" in platform_cfg:
                     bridged["mention_patterns"] = platform_cfg["mention_patterns"]
+                if "history_backfill" in platform_cfg:
+                    bridged["history_backfill"] = platform_cfg["history_backfill"]
+                if "history_backfill_limit" in platform_cfg:
+                    bridged["history_backfill_limit"] = platform_cfg["history_backfill_limit"]
                 if "exclusive_bot_mentions" in platform_cfg:
                     bridged["exclusive_bot_mentions"] = platform_cfg["exclusive_bot_mentions"]
                 if plat == Platform.TELEGRAM and "observe_unmentioned_group_messages" in platform_cfg:

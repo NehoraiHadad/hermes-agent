@@ -401,6 +401,10 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
     - group_policy: "open" | "allowlist" | "disabled" | "pairing" — which groups are processed (default: "pairing")
     - group_allow_from: List of group JIDs allowed (when group_policy="allowlist")
     - send_read_receipts: Mark accepted inbound WhatsApp messages as read
+    - history_backfill: Buffer mention-gated group messages and attach them as
+      channel_context on the next triggered message (default: true; only
+      active when require_mention is on)
+    - history_backfill_limit: Max buffered messages per group (default: 50)
 
     Behavior (gating, mention parsing, markdown conversion, chunking) is
     provided by ``WhatsAppBehaviorMixin`` so the Cloud API adapter can
@@ -486,6 +490,16 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         )
         self._pending_text_batches: Dict[str, MessageEvent] = {}
         self._pending_text_batch_tasks: Dict[str, asyncio.Task] = {}
+
+        # Group history backfill state (see WhatsAppBehaviorMixin's
+        # "group history backfill" section).  Buffers mention-gated group
+        # messages so the next triggered message carries them as
+        # MessageEvent.channel_context.  Both dicts are bounded: buffers by
+        # history_backfill_limit per chat, watermarks by one int per
+        # (allowed chat, participant).
+        self._group_history_buffers: Dict[str, list] = {}
+        self._group_history_watermarks: Dict[str, Dict[str, int]] = {}
+        self._group_history_seq: int = 0
 
     def _coerce_float_extra(self, key: str, default: float) -> float:
         """Read a float from ``config.extra``, guarding against bad/non-finite values.
@@ -1422,6 +1436,10 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             if event.media_urls:
                 existing.media_urls.extend(event.media_urls)
                 existing.media_types.extend(event.media_types)
+            # Building the later event may have consumed group history (its
+            # watermark already advanced); don't drop that context in the merge.
+            if event.channel_context and not existing.channel_context:
+                existing.channel_context = event.channel_context
 
         prior_task = self._pending_text_batch_tasks.get(key)
         if prior_task and not prior_task.done():
@@ -1453,6 +1471,9 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         """Build a MessageEvent from bridge message data, downloading images to cache."""
         try:
             if not self._should_process_message(data):
+                # Mention-gated group messages aren't lost: buffer them so the
+                # next triggered message replays them as channel_context.
+                self._maybe_record_group_history(data)
                 return None
 
             # Determine message type
@@ -1633,6 +1654,13 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 if not body.startswith(_OWNER_REPLY_PREFIX):
                     body = f"{_OWNER_REPLY_PREFIX}{body}"
 
+            # Attach buffered group history the triggering sender's session
+            # hasn't seen yet (run.py prepends channel_context above the
+            # trigger message, after the sender prefix is applied).
+            channel_context = (
+                self._build_group_channel_context(data) if is_group else None
+            )
+
             return MessageEvent(
                 text=body,
                 message_type=msg_type,
@@ -1646,6 +1674,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 reply_to_text=reply_to_text,
                 reply_to_author_id=reply_to_author_id,
                 reply_to_is_own_message=reply_to_is_own_message,
+                channel_context=channel_context,
             )
         except Exception as e:
             print(f"[{self.name}] Error building event: {e}")
