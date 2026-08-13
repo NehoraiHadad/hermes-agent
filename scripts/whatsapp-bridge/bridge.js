@@ -205,7 +205,10 @@ function trackSentMessageId(sent) {
 
 function normalizeWhatsAppId(value) {
   if (!value) return '';
-  return String(value).replace(':', '@');
+  // Keep in sync with bridge_helpers.js — strip the Baileys ":<device>"
+  // suffix (e.g. "15551234567:17@s.whatsapp.net") instead of swapping the
+  // colon for "@", which mangles the id and breaks botIds equality checks.
+  return String(value).replace(/:[^@]*@/, '@');
 }
 
 function redactWhatsAppId(value) {
