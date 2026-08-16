@@ -258,7 +258,9 @@ def test_immediate_context_window_remains_bounded_to_fifty_messages():
     # Durable storage is one row per message, independent of the ring bound.
     assert len(adapter._session_store.messages) == 55
     history = [message for _sid, message, _skip in adapter._session_store.messages]
-    replay, observed_context = _build_gateway_agent_history(history)
+    replay, observed_context = _build_gateway_agent_history(
+        history, channel_prompt="observed WhatsApp group context"
+    )
     assert replay == []
     assert observed_context is not None
     context_lines = observed_context.splitlines()
@@ -268,7 +270,7 @@ def test_immediate_context_window_remains_bounded_to_fifty_messages():
     assert observed_context.count("[Alice|") == 50
 
 
-def test_observed_rows_never_replay_as_user_turns_without_prompt_marker():
+def test_observed_rows_are_dropped_without_prompt_marker():
     from gateway.run import _build_gateway_agent_history
 
     history = [
@@ -285,9 +287,7 @@ def test_observed_rows_never_replay_as_user_turns_without_prompt_marker():
     )
 
     assert replay == [{"role": "assistant", "content": "previous answer"}]
-    assert observed_context == (
-        "[Alice|6281234567890@s.whatsapp.net]\nambient"
-    )
+    assert observed_context is None
 
 
 def test_text_debounce_never_merges_different_group_senders():
