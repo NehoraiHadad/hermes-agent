@@ -142,6 +142,11 @@ _TELEGRAM_NOISY_STATUS_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+_GATEWAY_OPERATOR_STATUS_NOTICE_RE = re.compile(
+    r"\bhermes\s+config\s+set\b",
+    re.IGNORECASE,
+)
+
 
 _HYGIENE_COOLDOWN_LADDER_MULTIPLIERS = (1, 3, 9)
 # Absolute ceiling on an escalated hygiene cooldown, mirroring
@@ -358,6 +363,21 @@ _GATEWAY_RAW_TEXT_PLATFORMS = frozenset(
 def _gateway_surface_passes_raw_text(platform: Any) -> bool:
     """True only for programmatic/local surfaces that must keep raw text."""
     return _gateway_platform_value(platform) in _GATEWAY_RAW_TEXT_PLATFORMS
+
+
+def _source_is_group_scope(source: Any) -> bool:
+    """Classify unknown/non-DM scopes as multi-user and fail closed."""
+    from gateway.slash_access import _scope_for_chat_type
+
+    return _scope_for_chat_type(getattr(source, "chat_type", None)) == "group"
+
+
+def _adapter_sends_truly_private_notice(adapter: Any) -> bool:
+    """Return true only when an adapter overrides the public fallback."""
+    impl = getattr(type(adapter), "send_private_notice", None)
+    if impl is None:
+        return callable(getattr(adapter, "send_private_notice", None))
+    return impl is not BasePlatformAdapter.send_private_notice
 
 
 _GATEWAY_PROVIDER_ERROR_RE = re.compile(
@@ -755,7 +775,13 @@ def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
     return redacted
 
 
-def _prepare_gateway_status_message(platform: Any, event_type: str, message: str) -> Optional[str]:
+def _prepare_gateway_status_message(
+    platform: Any,
+    event_type: str,
+    message: str,
+    *,
+    group_scope: bool = False,
+) -> Optional[str]:
     """Filter/sanitize agent status callbacks before platform delivery.
 
     Local/CLI sessions keep the raw diagnostic stream. Messaging gateway
@@ -768,6 +794,8 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
         return text
 
     text = _redact_gateway_user_facing_secrets(text)
+    if group_scope and _GATEWAY_OPERATOR_STATUS_NOTICE_RE.search(text):
+        return None
     if _TELEGRAM_NOISY_STATUS_RE.search(text):
         # Opt-in #52995: `compression.progress_notices: true` lets ROUTINE
         # compression progress statuses through to chat platforms. The
@@ -4850,6 +4878,7 @@ class TurnRunner:
             ctx.source.platform,
             event_type,
             message,
+            group_scope=_source_is_group_scope(ctx.source),
         )
         if prepared_message is None:
             logger.debug(
@@ -14838,7 +14867,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
 
     async def _deliver_platform_notice(self, source, content: str) -> None:
-        """Deliver a setup/operational notice using platform-specific privacy rules."""
+        """Deliver operator notices without posting them into group chats."""
         adapter = self._adapter_for_source(source)
         if not adapter:
             return
@@ -14859,23 +14888,34 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if config and hasattr(config, "get_notice_delivery"):
             notice_delivery = config.get_notice_delivery(source.platform)
 
+        group_scope = _source_is_group_scope(source)
         metadata = self._thread_metadata_for_source(source)
         if notice_delivery == "private" and getattr(source, "user_id", None):
-            try:
-                result = await adapter.send_private_notice(
-                    source.chat_id,
-                    source.user_id,
-                    content,
-                    metadata=metadata,
-                )
-                if getattr(result, "success", False):
-                    return
-            except Exception:
-                logger.debug(
-                    "[%s] send_private_notice failed, falling back to public",
-                    getattr(source, "platform", "?"),
-                    exc_info=True,
-                )
+            if not group_scope or _adapter_sends_truly_private_notice(adapter):
+                try:
+                    result = await adapter.send_private_notice(
+                        source.chat_id,
+                        source.user_id,
+                        content,
+                        metadata=metadata,
+                    )
+                    if getattr(result, "success", False):
+                        return
+                except Exception:
+                    logger.debug(
+                        "[%s] send_private_notice failed%s",
+                        getattr(source, "platform", "?"),
+                        "" if group_scope else ", falling back to public",
+                        exc_info=True,
+                    )
+
+        if group_scope:
+            logger.info(
+                "Suppressing operator notice in group chat %s:%s",
+                getattr(getattr(source, "platform", None), "value", "?"),
+                getattr(source, "chat_id", "?"),
+            )
+            return
 
         await adapter.send(source.chat_id, content, metadata=metadata)
 
@@ -19914,12 +19954,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         hasn't set ``allow_admin_from`` for the scope, the policy returns
         ``enabled=False`` and this method always returns None.
         """
-        from gateway.slash_access import policy_for_source as _policy_for_source
+        from gateway.slash_access import (
+            identity_candidates as _identity_candidates,
+            policy_for_source as _policy_for_source,
+        )
 
         if not canonical_cmd:
             return None
         policy = _policy_for_source(self.config, source)
-        if not policy.enabled or policy.can_run(source.user_id, canonical_cmd):
+        if not policy.enabled:
+            return None
+        if any(
+            policy.can_run(candidate, canonical_cmd)
+            for candidate in _identity_candidates(source)
+        ):
             return None
         logger.info(
             "Slash command /%s denied for %s:%s (not admin, not in user_allowed_commands)",

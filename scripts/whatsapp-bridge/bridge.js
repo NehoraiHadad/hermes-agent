@@ -410,13 +410,10 @@ async function startSocket() {
     browser: ['Hermes Agent', 'Chrome', '120.0'],
     syncFullHistory: false,
     markOnlineOnConnect: false,
-    // Required for Baileys 7.x: without this, incoming messages that need
-    // E2EE session re-establishment are silently dropped (msg.message === null)
-    getMessage: async (key) => {
-      // We don't maintain a message store, so return a placeholder.
-      // This is enough for Baileys to complete the retry handshake.
-      return { conversation: '' };
-    },
+    // We keep no message store, so a retried message cannot be reproduced.
+    // Returning a placeholder would re-encrypt and send an empty message to
+    // the peer; undefined lets Baileys skip that resend safely.
+    getMessage: async () => undefined,
   });
 
   sock.ev.on('creds.update', () => { saveCreds(); lidToPhone = buildLidMap(); });

@@ -34,9 +34,11 @@ included here — only the slash-command access split.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, FrozenSet, Iterable, Optional, Tuple
 
+logger = logging.getLogger(__name__)
 
 # Slash commands that MUST stay reachable for any allowed user, even when
 # slash gating is enabled and the user has no commands listed. Without this
@@ -193,6 +195,36 @@ def policy_from_extra(extra: dict, scope: str) -> SlashAccessPolicy:
     )
 
 
+_ALIASED_PLATFORMS = frozenset({"whatsapp", "whatsapp_cloud"})
+
+
+def identity_candidates(source: Any) -> Tuple[str, ...]:
+    """Return every legitimate identity for a platform sender."""
+    raw = getattr(source, "user_id", None)
+    if not raw:
+        return ()
+    candidates = [str(raw)]
+    platform = getattr(source, "platform", None)
+    name = str(getattr(platform, "value", platform) or "").lower()
+    if name not in _ALIASED_PLATFORMS:
+        return tuple(candidates)
+    try:
+        from gateway.whatsapp_identity import (
+            expand_whatsapp_aliases,
+            normalize_whatsapp_identifier,
+        )
+
+        for alias in sorted(expand_whatsapp_aliases(str(raw))):
+            if alias and alias not in candidates:
+                candidates.append(alias)
+        normalized = normalize_whatsapp_identifier(str(raw))
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+    except Exception:
+        logger.debug("slash_access: alias expansion failed for %r", raw, exc_info=True)
+    return tuple(candidates)
+
+
 def policy_for_source(gateway_config: Any, source: Any) -> SlashAccessPolicy:
     """Resolve the access policy for a SessionSource.
 
@@ -224,6 +256,7 @@ def policy_for_source(gateway_config: Any, source: Any) -> SlashAccessPolicy:
 
 __all__ = [
     "SlashAccessPolicy",
+    "identity_candidates",
     "policy_from_extra",
     "policy_for_source",
 ]

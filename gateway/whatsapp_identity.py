@@ -42,7 +42,21 @@ logger = logging.getLogger(__name__)
 # full-width digits / Unicode word chars can't sneak through.
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9@.+\-]+$")
 
-from hermes_constants import get_hermes_dir
+from hermes_constants import get_hermes_dir, get_process_hermes_home
+
+
+def _session_dir():
+    """Return the process-level bridge session directory.
+
+    WhatsApp pairing is owned by the gateway process, while routed turns may
+    temporarily override HERMES_HOME to a profile directory. LID mappings must
+    therefore always resolve from the launch home rather than the active turn.
+    """
+    return get_hermes_dir(
+        "platforms/whatsapp/session",
+        "whatsapp/session",
+        home=get_process_hermes_home(),
+    )
 
 
 def normalize_whatsapp_identifier(value: str) -> str:
@@ -133,7 +147,7 @@ def expand_whatsapp_aliases(identifier: str) -> Set[str]:
     if not normalized:
         return set()
 
-    session_dir = get_hermes_dir("platforms/whatsapp/session", "whatsapp/session")
+    session_dir = _session_dir()
     resolved: Set[str] = set()
     queue = [normalized]
 

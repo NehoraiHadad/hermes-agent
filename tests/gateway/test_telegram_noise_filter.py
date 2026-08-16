@@ -140,6 +140,22 @@ def test_telegram_status_keeps_legitimate_heartbeat_messages(message):
     assert _prepare_gateway_status_message(Platform.TELEGRAM, "lifecycle", message) == message
 
 
+def test_operator_config_notice_is_suppressed_only_in_group_scope():
+    message = "Run hermes config set compression.threshold 0.8 to change this"
+    assert (
+        _prepare_gateway_status_message(
+            Platform.WHATSAPP, "lifecycle", message, group_scope=True
+        )
+        is None
+    )
+    assert (
+        _prepare_gateway_status_message(
+            Platform.WHATSAPP, "lifecycle", message, group_scope=False
+        )
+        == message
+    )
+
+
 @pytest.mark.parametrize("platform", CHAT_PLATFORMS)
 @pytest.mark.parametrize("message", NOISY_STATUS_MESSAGES)
 def test_all_chat_gateways_suppress_noise(platform, message):

@@ -5,9 +5,12 @@ exercise the dispatch site live in test_slash_access_dispatch.py.
 """
 from __future__ import annotations
 
+import json
+
 from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.session import SessionSource
 from gateway.slash_access import (
+    identity_candidates,
     policy_for_source,
     policy_from_extra,
 )
@@ -125,4 +128,31 @@ class TestPolicyForSource:
         assert dm_p.can_run("999", "stop") is True  # backward compat
         assert grp_p.enabled is True
         assert grp_p.can_run("999", "stop") is False  # gated
+
+
+def test_whatsapp_lid_sender_matches_phone_number_admin(tmp_path, monkeypatch):
+    home = tmp_path / "hermes-home"
+    session_dir = home / "platforms" / "whatsapp" / "session"
+    session_dir.mkdir(parents=True)
+    (session_dir / "lid-mapping-160868067209361.json").write_text(
+        json.dumps("972547401660@s.whatsapp.net"), encoding="utf-8"
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    cfg = GatewayConfig(
+        platforms={
+            Platform.WHATSAPP: PlatformConfig(
+                enabled=True,
+                extra={"group_allow_admin_from": ["972547401660"]},
+            )
+        }
+    )
+    source = SessionSource(
+        platform=Platform.WHATSAPP,
+        chat_id="120363428948689789@g.us",
+        chat_type="group",
+        user_id="160868067209361@lid",
+    )
+    policy = policy_for_source(cfg, source)
+    assert policy.is_admin(source.user_id) is False
+    assert any(policy.is_admin(uid) for uid in identity_candidates(source))
 
