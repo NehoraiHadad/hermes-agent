@@ -20,9 +20,26 @@ import {
   extractBridgeEvent,
   inboundReadReceiptKeys,
   mediaPayloadForFile,
+  normalizeWhatsAppId,
   pollCreationMessageFromPayload,
   pollUpdateForAggregation,
 } from './bridge_helpers.js';
+
+// -- bot id normalization (multi-device suffix) ---------------------------
+{
+  assert.equal(
+    normalizeWhatsAppId('15551234567:17@s.whatsapp.net'),
+    '15551234567@s.whatsapp.net',
+  );
+  assert.equal(normalizeWhatsAppId('98765432101112:5@lid'), '98765432101112@lid');
+  assert.equal(
+    normalizeWhatsAppId('15551234567@s.whatsapp.net'),
+    '15551234567@s.whatsapp.net',
+  );
+  assert.equal(normalizeWhatsAppId('120363001234567890@g.us'), '120363001234567890@g.us');
+  assert.equal(normalizeWhatsAppId(''), '');
+  console.log('  ✓ normalizeWhatsAppId strips multi-device suffixes');
+}
 
 // -- inbound read receipts ------------------------------------------------
 {

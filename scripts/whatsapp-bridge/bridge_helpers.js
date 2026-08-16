@@ -15,7 +15,10 @@ export const MIME_MAP = {
 
 export function normalizeWhatsAppId(value) {
   if (!value) return '';
-  return String(value).replace(':', '@');
+  // Baileys multi-device JIDs use ``user:device@server`` while mentions and
+  // quoted participants use ``user@server``. Strip the transport-only device
+  // suffix so bot identity comparisons use the same principal shape.
+  return String(value).replace(/:[^@]*@/, '@');
 }
 
 export function getMessageContent(msg) {
